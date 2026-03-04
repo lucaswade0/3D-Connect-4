@@ -433,6 +433,8 @@ function setupConn(c) {
 
 function startGame() {
   lobbyEl.classList.add('hidden');
+  document.activeElement?.blur();
+  renderer.domElement.focus();
   gameActive = true;
   board = new Board();
   currentTurn = 1;
