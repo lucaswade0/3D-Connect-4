@@ -92,7 +92,7 @@
     <div class="legend-item"><span class="legend-dot" style="background:#ff4646"></span> <span id="p2-label">Player 2</span></div>
   </div>
   <div class="bottom-left">
-    Drag: orbit | Scroll: zoom | <a href="index.html">Play vs AI</a>
+    Arrows/Drag: orbit | Scroll: zoom | <a href="index.html">Play vs AI</a>
   </div>
 </div>
 
@@ -282,6 +282,9 @@ function doMove(row, col, piece) {
   fallingData = { targetY, row, col, piece, tl };
 }
 
+const keysDown = {};
+window.addEventListener('keydown', e => { keysDown[e.code] = true; });
+window.addEventListener('keyup', e => { keysDown[e.code] = false; });
 window.addEventListener('mousemove', onMouseMove);
 window.addEventListener('click', onClick);
 window.addEventListener('resize', () => {
@@ -296,6 +299,13 @@ const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
   const dt = clock.getDelta();
+  // Arrow key orbit
+  const orbitSpeed = 1.5;
+  if(keysDown['ArrowLeft'])  controls.autoRotateSpeed = 0; // handled manually
+  if(keysDown['ArrowLeft'])  { const angle = orbitSpeed * dt; const offset = new THREE.Vector3().subVectors(camera.position, controls.target); offset.applyAxisAngle(new THREE.Vector3(0,1,0), angle); camera.position.copy(controls.target).add(offset); }
+  if(keysDown['ArrowRight']) { const angle = -orbitSpeed * dt; const offset = new THREE.Vector3().subVectors(camera.position, controls.target); offset.applyAxisAngle(new THREE.Vector3(0,1,0), angle); camera.position.copy(controls.target).add(offset); }
+  if(keysDown['ArrowUp'])    camera.position.y = Math.min(camera.position.y + 5*dt, 20);
+  if(keysDown['ArrowDown'])  camera.position.y = Math.max(camera.position.y - 5*dt, 2);
   controls.update();
 
   // Hover
