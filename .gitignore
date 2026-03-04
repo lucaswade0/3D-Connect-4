@@ -1,0 +1,5 @@
+connect4_3d
+raylib-5.5/
+raylib-5.5.tar.gz
+*.o
+*.dSYM/
