@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Connect Four — Multiplayer</title>
+<script type="importmap">
+{ "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #14141e; color: #ccc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow: hidden; }
+  canvas { display: block; }
+  #hud { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+  #hud > * { pointer-events: auto; }
+  .top-left { position: absolute; top: 20px; left: 20px; }
+  .top-left h1 { font-size: 26px; color: #fff; margin-bottom: 4px; }
+  .top-left .status { font-size: 20px; }
+  .top-right { position: absolute; top: 20px; right: 20px; text-align: right; }
+  .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; justify-content: flex-end; }
+  .legend-dot { width: 18px; height: 18px; border-radius: 50%; }
+  .bottom-left { position: absolute; bottom: 12px; left: 20px; font-size: 13px; color: #666; }
+  .bottom-left a { color: #3c8cff; text-decoration: none; }
+
+  /* Lobby overlay */
+  #lobby { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(20,20,30,0.95);
+    display: flex; justify-content: center; align-items: center; z-index: 10; flex-direction: column; gap: 20px; }
+  #lobby.hidden { display: none; }
+  .lobby-card { background: #1e1e2e; border-radius: 16px; padding: 40px; text-align: center;
+    box-shadow: 0 0 40px rgba(60,140,255,0.15); max-width: 500px; width: 90%; }
+  .lobby-card h1 { color: #fff; font-size: 28px; margin-bottom: 8px; }
+  .lobby-card p { color: #999; margin-bottom: 24px; }
+  .btn { display: inline-block; padding: 14px 32px; border-radius: 10px; border: none; font-size: 16px;
+    cursor: pointer; font-weight: 600; transition: transform 0.1s, box-shadow 0.1s; }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-blue { background: #3c8cff; color: #fff; }
+  .btn-blue:hover { box-shadow: 0 4px 20px rgba(60,140,255,0.4); }
+  .btn-red { background: #ff4646; color: #fff; margin-left: 12px; }
+  .btn-small { padding: 10px 20px; font-size: 14px; }
+
+  #link-box { margin-top: 20px; display: none; }
+  #link-box.show { display: block; }
+  #link-box input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #333; background: #14141e;
+    color: #3c8cff; font-size: 14px; text-align: center; margin-bottom: 10px; }
+  .waiting { color: #ffb44c; font-size: 15px; margin-top: 12px; }
+  .status-connected { color: #4cff8c; }
+  .status-yourturn { color: #3c8cff; }
+  .status-theirturn { color: #ffb44c; }
+  .status-win { color: #4cff8c; }
+  .status-lose { color: #ff4646; }
+  .status-draw { color: #ffdd57; }
+
+  /* Game over overlay */
+  #gameover { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: rgba(20,20,30,0.92); border-radius: 16px; padding: 32px 48px; text-align: center;
+    display: none; z-index: 5; box-shadow: 0 0 40px rgba(0,0,0,0.5); }
+  #gameover.show { display: block; }
+  #gameover h2 { font-size: 28px; margin-bottom: 12px; }
+  #gameover .btn { margin-top: 8px; }
+</style>
+</head>
+<body>
+<div id="lobby">
+  <div class="lobby-card">
+    <h1>3D Connect Four</h1>
+    <p>Play online with a friend — no server needed</p>
+    <div id="lobby-buttons">
+      <button class="btn btn-blue" onclick="createGame()">Create Game</button>
+    </div>
+    <div id="link-box">
+      <p style="color:#fff; margin-bottom:8px;">Share this link with your opponent:</p>
+      <input id="link-input" readonly onclick="this.select()">
+      <button class="btn btn-blue btn-small" onclick="copyLink()">Copy Link</button>
+      <div class="waiting" id="waiting-msg">Waiting for opponent to join...</div>
+    </div>
+    <div id="joining-msg" style="display:none;">
+      <div class="waiting">Connecting to opponent...</div>
+    </div>
+  </div>
+</div>
+
+<div id="hud">
+  <div class="top-left">
+    <h1>3D CONNECT FOUR</h1>
+    <div class="status" id="status">Waiting...</div>
+  </div>
+  <div class="top-right">
+    <div class="legend-item"><span class="legend-dot" style="background:#3c8cff"></span> <span id="p1-label">Player 1</span></div>
+    <div class="legend-item"><span class="legend-dot" style="background:#ff4646"></span> <span id="p2-label">Player 2</span></div>
+  </div>
+  <div class="bottom-left">
+    Drag: orbit | Scroll: zoom | <a href="index.html">Play vs AI</a>
+  </div>
+</div>
+
+<div id="gameover">
+  <h2 id="gameover-text"></h2>
+  <button class="btn btn-blue" onclick="rematch()">Rematch</button>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ─── Game Constants ─────────────────────────────────────────────────────
+const SZ = 4, SPACING = 2.0, RAD = 0.4;
+const DIRS = [
+  [1,0,0],[0,1,0],[0,0,1],
+  [1,1,0],[1,-1,0],[1,0,1],[1,0,-1],
+  [0,1,1],[0,1,-1],
+  [1,1,1],[1,1,-1],[1,-1,1],[1,-1,-1]
+];
+
+// ─── Board Logic ────────────────────────────────────────────────────────
+class Board {
+  constructor() { this.cells = Array.from({length:SZ}, ()=>Array.from({length:SZ}, ()=>new Int8Array(SZ))); this.moveCount=0; }
+  clone() { const b=new Board(); for(let l=0;l<SZ;l++) for(let r=0;r<SZ;r++) for(let c=0;c<SZ;c++) b.cells[l][r][c]=this.cells[l][r][c]; b.moveCount=this.moveCount; return b; }
+  drop(row, col, piece) { for(let l=0;l<SZ;l++) if(this.cells[l][row][col]===0){ this.cells[l][row][col]=piece; this.moveCount++; return l; } return -1; }
+  columnFull(r,c) { return this.cells[SZ-1][r][c]!==0; }
+  isFull() { return this.moveCount>=SZ*SZ*SZ; }
+  checkWin(piece) {
+    for(let l=0;l<SZ;l++) for(let r=0;r<SZ;r++) for(let c=0;c<SZ;c++){
+      if(this.cells[l][r][c]!==piece) continue;
+      for(const d of DIRS){ let count=0;
+        for(let s=0;s<SZ;s++){ const nl=l+d[0]*s,nr=r+d[1]*s,nc=c+d[2]*s;
+          if(nl<0||nl>=SZ||nr<0||nr>=SZ||nc<0||nc>=SZ) break;
+          if(this.cells[nl][nr][nc]!==piece) break; count++; }
+        if(count===SZ) return true; } } return false;
+  }
+  findWinLine(piece) {
+    for(let l=0;l<SZ;l++) for(let r=0;r<SZ;r++) for(let c=0;c<SZ;c++){
+      if(this.cells[l][r][c]!==piece) continue;
+      for(const d of DIRS){ let count=0;
+        for(let s=0;s<SZ;s++){ const nl=l+d[0]*s,nr=r+d[1]*s,nc=c+d[2]*s;
+          if(nl<0||nl>=SZ||nr<0||nr>=SZ||nc<0||nc>=SZ) break;
+          if(this.cells[nl][nr][nc]!==piece) break; count++; }
+        if(count===SZ) return Array.from({length:SZ},(_,s)=>([l+d[0]*s, r+d[1]*s, c+d[2]*s])); } } return null;
+  }
+}
+
+// ─── Three.js Setup ─────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x14141e);
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 100);
+camera.position.set(12, 10, 12);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+document.body.prepend(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 3, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 8;
+controls.maxDistance = 30;
+controls.update();
+
+// Lights
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(10, 15, 10);
+scene.add(dirLight);
+
+// ─── Build Static Grid ──────────────────────────────────────────────────
+function cellPos(l,r,c) { return new THREE.Vector3((c-(SZ-1)/2)*SPACING, l*SPACING+RAD, (r-(SZ-1)/2)*SPACING); }
+
+// Platform
+const platGeo = new THREE.BoxGeometry(SZ*SPACING+1, 0.3, SZ*SPACING+1);
+const platMat = new THREE.MeshStandardMaterial({ color: 0x282837 });
+const platform = new THREE.Mesh(platGeo, platMat);
+platform.position.y = -0.3;
+scene.add(platform);
+
+// Poles
+const poleMat = new THREE.MeshStandardMaterial({ color: 0x50506a, transparent: true, opacity: 0.4 });
+for(let r=0;r<SZ;r++) for(let c=0;c<SZ;c++){
+  const bot = cellPos(0,r,c), top = cellPos(SZ-1,r,c);
+  const h = top.y - bot.y + RAD*2;
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.04,h,8), poleMat);
+  pole.position.set(bot.x, (bot.y+top.y)/2, bot.z);
+  scene.add(pole);
+}
+// Grid lines
+const lineMat = new THREE.LineBasicMaterial({ color: 0x50506a, transparent: true, opacity: 0.3 });
+for(let l=0;l<SZ;l++){
+  for(let r=0;r<SZ;r++){ const pts=[cellPos(l,r,0),cellPos(l,r,SZ-1)]; scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),lineMat)); }
+  for(let c=0;c<SZ;c++){ const pts=[cellPos(l,0,c),cellPos(l,SZ-1,c)]; scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),lineMat)); }
+}
+
+// ─── Dynamic Objects ────────────────────────────────────────────────────
+const sphereGeo = new THREE.SphereGeometry(RAD, 24, 24);
+const mat1 = new THREE.MeshStandardMaterial({ color: 0x3c8cff });
+const mat2 = new THREE.MeshStandardMaterial({ color: 0xff4646 });
+const ghostMat = new THREE.MeshStandardMaterial({ color: 0x3c8cff, transparent: true, opacity: 0.35 });
+const ghostMat2 = new THREE.MeshStandardMaterial({ color: 0xff4646, transparent: true, opacity: 0.35 });
+
+const pieceMeshes = []; // track all placed piece meshes
+let ghostMesh = null;
+let fallingMesh = null;
+let fallingData = null; // {targetY, row, col, piece}
+let winBeams = [];
+
+function addPiece(l, r, c, piece) {
+  const mesh = new THREE.Mesh(sphereGeo, piece===1 ? mat1.clone() : mat2.clone());
+  mesh.position.copy(cellPos(l, r, c));
+  mesh.userData = {l, r, c, piece};
+  scene.add(mesh);
+  pieceMeshes.push(mesh);
+  return mesh;
+}
+
+function clearBoard3D() {
+  for(const m of pieceMeshes) scene.remove(m);
+  pieceMeshes.length = 0;
+  for(const b of winBeams) scene.remove(b);
+  winBeams = [];
+  if(ghostMesh){ scene.remove(ghostMesh); ghostMesh=null; }
+  if(fallingMesh){ scene.remove(fallingMesh); fallingMesh=null; fallingData=null; }
+}
+
+// ─── Game State ─────────────────────────────────────────────────────────
+let board = new Board();
+let myPiece = 0; // 1 or 2, assigned on connect
+let currentTurn = 1; // piece 1 always goes first
+let gameActive = false;
+let conn = null; // PeerJS connection
+let peer = null;
+let isHost = false;
+let hoverRow = -1, hoverCol = -1;
+
+const statusEl = document.getElementById('status');
+const lobbyEl = document.getElementById('lobby');
+const gameoverEl = document.getElementById('gameover');
+const gameoverText = document.getElementById('gameover-text');
+
+function setStatus(msg, cls='') { statusEl.textContent = msg; statusEl.className = 'status ' + cls; }
+
+function myTurn() { return gameActive && currentTurn === myPiece && !fallingData; }
+
+// ─── Raycasting for Hover/Click ─────────────────────────────────────────
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+// Invisible column hit boxes
+const hitBoxes = [];
+const hitMat = new THREE.MeshBasicMaterial({ visible: false });
+for(let r=0;r<SZ;r++) for(let c=0;c<SZ;c++){
+  const center = cellPos(SZ/2, r, c);
+  const box = new THREE.Mesh(new THREE.BoxGeometry(SPACING*0.8, SZ*SPACING, SPACING*0.8), hitMat);
+  box.position.set(center.x, SZ*SPACING/2, center.z);
+  box.userData = {row: r, col: c};
+  scene.add(box);
+  hitBoxes.push(box);
+}
+
+function onMouseMove(e) {
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+}
+
+function onClick(e) {
+  if(!myTurn() || hoverRow < 0) return;
+  doMove(hoverRow, hoverCol, myPiece);
+  conn.send({ type: 'move', row: hoverRow, col: hoverCol });
+}
+
+function doMove(row, col, piece) {
+  // Find target layer
+  let tl = -1;
+  for(let l=0;l<SZ;l++) if(board.cells[l][row][col]===0){ tl=l; break; }
+  if(tl < 0) return;
+
+  // Start falling animation
+  const startPos = cellPos(SZ, row, col);
+  const targetY = cellPos(tl, row, col).y;
+  fallingMesh = new THREE.Mesh(sphereGeo, piece===1 ? mat1 : mat2);
+  fallingMesh.position.copy(startPos);
+  scene.add(fallingMesh);
+  fallingData = { targetY, row, col, piece, tl };
+}
+
+window.addEventListener('mousemove', onMouseMove);
+window.addEventListener('click', onClick);
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ─── Animation Loop ─────────────────────────────────────────────────────
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = clock.getDelta();
+  controls.update();
+
+  // Hover
+  if(myTurn()) {
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObjects(hitBoxes);
+    hoverRow = -1; hoverCol = -1;
+    if(hits.length > 0) {
+      const {row, col} = hits[0].object.userData;
+      if(!board.columnFull(row, col)) { hoverRow = row; hoverCol = col; }
+    }
+    // Ghost
+    if(hoverRow >= 0) {
+      if(!ghostMesh) { ghostMesh = new THREE.Mesh(sphereGeo, myPiece===1 ? ghostMat : ghostMat2); scene.add(ghostMesh); }
+      ghostMesh.visible = true;
+      const gp = cellPos(SZ, hoverRow, hoverCol);
+      gp.y -= SPACING * 0.3;
+      ghostMesh.position.copy(gp);
+    } else if(ghostMesh) { ghostMesh.visible = false; }
+  } else if(ghostMesh) { ghostMesh.visible = false; }
+
+  // Falling
+  if(fallingData) {
+    fallingMesh.position.y -= dt * 15;
+    if(fallingMesh.position.y <= fallingData.targetY) {
+      fallingMesh.position.y = fallingData.targetY;
+      scene.remove(fallingMesh);
+      fallingMesh = null;
+      const {row, col, piece, tl} = fallingData;
+      fallingData = null;
+      board.drop(row, col, piece);
+      addPiece(tl, row, col, piece);
+
+      if(board.checkWin(piece)) {
+        gameActive = false;
+        showWinLine(piece);
+        if(piece === myPiece) {
+          setStatus('You win!', 'status-win');
+          gameoverText.textContent = 'You Win!';
+          gameoverText.style.color = '#4cff8c';
+        } else {
+          setStatus('You lose!', 'status-lose');
+          gameoverText.textContent = 'You Lose!';
+          gameoverText.style.color = '#ff4646';
+        }
+        gameoverEl.classList.add('show');
+      } else if(board.isFull()) {
+        gameActive = false;
+        setStatus("It's a draw!", 'status-draw');
+        gameoverText.textContent = "It's a Draw!";
+        gameoverText.style.color = '#ffdd57';
+        gameoverEl.classList.add('show');
+      } else {
+        currentTurn = piece === 1 ? 2 : 1;
+        if(currentTurn === myPiece) setStatus('Your turn!', 'status-yourturn');
+        else setStatus("Opponent's turn...", 'status-theirturn');
+      }
+    }
+  }
+
+  // Win beam pulse
+  const t = clock.elapsedTime;
+  for(const beam of winBeams) {
+    beam.material.opacity = 0.4 + 0.4 * Math.sin(t * 5);
+  }
+
+  renderer.render(scene, camera);
+}
+
+function showWinLine(piece) {
+  const line = board.findWinLine(piece);
+  if(!line) return;
+  const color = piece===1 ? 0x3c8cff : 0xff4646;
+  for(let i=0;i<line.length-1;i++){
+    const a = cellPos(...line[i]), b = cellPos(...line[i+1]);
+    const dir = new THREE.Vector3().subVectors(b, a);
+    const len = dir.length();
+    const geo = new THREE.CylinderGeometry(0.08, 0.08, len, 8);
+    const mat = new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.6, emissive: color, emissiveIntensity: 0.5 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(a).add(dir.multiplyScalar(0.5));
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.normalize());
+    scene.add(mesh);
+    winBeams.push(mesh);
+  }
+  // Pulse winning pieces
+  for(const m of pieceMeshes) {
+    for(const [l,r,c] of line) {
+      if(m.userData.l===l && m.userData.r===r && m.userData.c===c) {
+        m.material.emissive = new THREE.Color(color);
+        m.material.emissiveIntensity = 0.5;
+      }
+    }
+  }
+}
+
+animate();
+
+// ─── PeerJS Networking ──────────────────────────────────────────────────
+function generateRoomCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for(let i=0;i<6;i++) code += chars[Math.floor(Math.random()*chars.length)];
+  return code;
+}
+
+function setupConn(c) {
+  conn = c;
+  conn.on('data', (data) => {
+    if(data.type === 'move') {
+      const otherPiece = myPiece === 1 ? 2 : 1;
+      doMove(data.row, data.col, otherPiece);
+    } else if(data.type === 'rematch-request') {
+      resetGame();
+      conn.send({ type: 'rematch-ack' });
+    } else if(data.type === 'rematch-ack') {
+      resetGame();
+    }
+  });
+  conn.on('close', () => {
+    gameActive = false;
+    setStatus('Opponent disconnected.', 'status-lose');
+  });
+}
+
+function startGame() {
+  lobbyEl.classList.add('hidden');
+  gameActive = true;
+  board = new Board();
+  currentTurn = 1;
+  clearBoard3D();
+  gameoverEl.classList.remove('show');
+  document.getElementById('p1-label').textContent = myPiece === 1 ? 'You (Blue)' : 'Opponent (Blue)';
+  document.getElementById('p2-label').textContent = myPiece === 2 ? 'You (Red)' : 'Opponent (Red)';
+  if(currentTurn === myPiece) setStatus('Your turn!', 'status-yourturn');
+  else setStatus("Opponent's turn...", 'status-theirturn');
+}
+
+function resetGame() {
+  board = new Board();
+  currentTurn = 1;
+  clearBoard3D();
+  gameoverEl.classList.remove('show');
+  gameActive = true;
+  if(currentTurn === myPiece) setStatus('Your turn!', 'status-yourturn');
+  else setStatus("Opponent's turn...", 'status-theirturn');
+}
+
+window.rematch = function() {
+  if(conn && conn.open) {
+    conn.send({ type: 'rematch-request' });
+    setStatus('Waiting for rematch...', 'status-theirturn');
+    gameoverEl.classList.remove('show');
+  }
+};
+
+// ─── Create / Join ──────────────────────────────────────────────────────
+const params = new URLSearchParams(window.location.search);
+const roomParam = params.get('room');
+
+async function loadPeerJS() {
+  return new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js';
+    s.onload = resolve;
+    document.head.appendChild(s);
+  });
+}
+
+window.createGame = async function() {
+  await loadPeerJS();
+  const roomCode = generateRoomCode();
+  isHost = true;
+  myPiece = 1;
+
+  document.getElementById('lobby-buttons').style.display = 'none';
+  document.getElementById('link-box').classList.add('show');
+  const link = window.location.origin + window.location.pathname + '?room=' + roomCode;
+  document.getElementById('link-input').value = link;
+
+  peer = new Peer('c4-' + roomCode, { debug: 0 });
+  peer.on('open', () => {
+    document.getElementById('waiting-msg').textContent = 'Waiting for opponent to join...';
+  });
+  peer.on('connection', (c) => {
+    setupConn(c);
+    c.on('open', () => {
+      conn.send({ type: 'start', piece: 2 });
+      startGame();
+    });
+  });
+  peer.on('error', (err) => {
+    document.getElementById('waiting-msg').textContent = 'Connection error: ' + err.type;
+  });
+};
+
+window.copyLink = function() {
+  const input = document.getElementById('link-input');
+  input.select();
+  navigator.clipboard.writeText(input.value);
+  const btn = document.querySelector('#link-box .btn');
+  btn.textContent = 'Copied!';
+  setTimeout(() => btn.textContent = 'Copy Link', 1500);
+};
+
+// Auto-join if room param present
+if(roomParam) {
+  (async () => {
+    await loadPeerJS();
+    isHost = false;
+    myPiece = 2;
+    document.getElementById('lobby-buttons').style.display = 'none';
+    document.getElementById('joining-msg').style.display = 'block';
+
+    peer = new Peer(undefined, { debug: 0 });
+    peer.on('open', () => {
+      const c = peer.connect('c4-' + roomParam, { reliable: true });
+      setupConn(c);
+      c.on('open', () => startGame());
+    });
+    peer.on('error', (err) => {
+      document.querySelector('#joining-msg .waiting').textContent = 'Failed to connect: ' + err.type;
+    });
+  })();
+}
+</script>
+</body>
+</html>
