@@ -10,9 +10,16 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
-#define MCTS_ITERS 15000
+#endif
+
+// ─── Difficulty ─────────────────────────────────────────────────────────────
+enum Difficulty { EASY = 0, MEDIUM = 1, HARD = 2 };
+const char* DIFF_NAMES[] = { "Easy", "Medium", "Hard" };
+
+#ifdef __EMSCRIPTEN__
+const int DIFF_ITERS[] = { 1000, 8000, 15000 };
 #else
-#define MCTS_ITERS 50000
+const int DIFF_ITERS[] = { 2000, 15000, 50000 };
 #endif
 
 // ─── Game Constants ─────────────────────────────────────────────────────────
@@ -22,7 +29,7 @@ constexpr float SPACING = 2.0f;
 constexpr float SPHERE_RAD = 0.4f;
 
 enum CellState : int8_t { EMPTY = 0, PLAYER = 1, AI_PIECE = 2 };
-enum GameState { PLAYING, AI_THINKING, GAME_OVER };
+enum GameState { MENU, PLAYING, AI_THINKING, GAME_OVER };
 
 constexpr int DIRS[13][3] = {
     {1,0,0},{0,1,0},{0,0,1},
@@ -116,7 +123,7 @@ struct MCTSNode {
     }
 };
 
-int mctsSearch(Board board, int8_t aiP) {
+int mctsSearch(Board board, int8_t aiP, int iterations) {
     auto valid = board.getValidMoves();
     if (valid.empty()) return -1;
     if (valid.size() == 1) return valid[0];
@@ -124,7 +131,7 @@ int mctsSearch(Board board, int8_t aiP) {
     int8_t humanP = (aiP == PLAYER) ? AI_PIECE : PLAYER;
     auto root = new MCTSNode(-1, humanP, nullptr, valid);
 
-    for (int i = 0; i < MCTS_ITERS; i++) {
+    for (int i = 0; i < iterations; i++) {
         Board sim = board;
         MCTSNode* node = root;
         while (node->untriedMoves.empty() && !node->children.empty()) {
@@ -187,14 +194,15 @@ void drawGridFrame() {
 struct Game {
     Board board;
     Camera3D camera;
-    GameState state = PLAYING;
+    GameState state = MENU;
     int8_t winner = EMPTY;
     int hoverRow = -1, hoverCol = -1;
     int aiMoveResult = -1;
     bool aiDone = false;
     float aiThinkTimer = 0.0f;
     float camAngle = 0.7f, camHeight = 10.0f, camDist = 16.0f;
-    std::string statusMsg = "Your turn! Click a column to drop.";
+    Difficulty difficulty = MEDIUM;
+    std::string statusMsg = "";
     Color statusColor = WHITE;
     int screenW, screenH;
 
@@ -230,11 +238,11 @@ struct Game {
 
     void reset() {
         board = {};
-        state = PLAYING;
+        state = MENU;
         winner = EMPTY;
         winLine.active = false;
         falling.active = false;
-        statusMsg = "Your turn! Click a column to drop.";
+        statusMsg = "";
         statusColor = WHITE;
     }
 };
@@ -336,7 +344,7 @@ void gameFrame() {
     if (g.state == AI_THINKING && !g.falling.active) {
         g.aiThinkTimer += dt;
         if (g.aiThinkTimer > 0.1f && !g.aiDone) {
-            g.aiMoveResult = mctsSearch(g.board, AI_PIECE);
+            g.aiMoveResult = mctsSearch(g.board, AI_PIECE, DIFF_ITERS[g.difficulty]);
             g.aiDone = true;
         }
         if (g.aiDone) {
@@ -348,6 +356,30 @@ void gameFrame() {
                 g.falling = {r, c, tl, AI_PIECE,
                              cellPos(SZ, r, c).y, cellPos(tl, r, c).y, true};
                 g.aiDone = false;
+            }
+        }
+    }
+
+    // Menu input
+    if (g.state == MENU) {
+        if (IsKeyPressed(KEY_ONE) || IsKeyPressed(KEY_KP_1)) { g.difficulty = EASY; g.state = PLAYING; g.statusMsg = "Your turn! Click a column to drop."; }
+        if (IsKeyPressed(KEY_TWO) || IsKeyPressed(KEY_KP_2)) { g.difficulty = MEDIUM; g.state = PLAYING; g.statusMsg = "Your turn! Click a column to drop."; }
+        if (IsKeyPressed(KEY_THREE) || IsKeyPressed(KEY_KP_3)) { g.difficulty = HARD; g.state = PLAYING; g.statusMsg = "Your turn! Click a column to drop."; }
+
+        // Mouse click on difficulty buttons
+        Vector2 mouse = GetMousePosition();
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            int bw = 200, bh = 50, gap = 20;
+            int totalH = 3 * bh + 2 * gap;
+            int startY = g.screenH / 2 - totalH / 2 + 40;
+            int bx = g.screenW / 2 - bw / 2;
+            for (int i = 0; i < 3; i++) {
+                int by = startY + i * (bh + gap);
+                if (mouse.x >= bx && mouse.x <= bx + bw && mouse.y >= by && mouse.y <= by + bh) {
+                    g.difficulty = (Difficulty)i;
+                    g.state = PLAYING;
+                    g.statusMsg = "Your turn! Click a column to drop.";
+                }
             }
         }
     }
@@ -441,6 +473,44 @@ void gameFrame() {
         std::string t = "Thinking";
         for (int i = 0; i < dots; i++) t += ".";
         DrawText(t.c_str(), g.screenW/2-60, g.screenH/2, 30, {255,180,80,255});
+    }
+
+    // Difficulty in HUD (when not in menu)
+    if (g.state != MENU) {
+        const char* diffLabel = TextFormat("Difficulty: %s", DIFF_NAMES[g.difficulty]);
+        DrawText(diffLabel, g.screenW-160, 82, 16, {150,150,150,255});
+    }
+
+    // Menu overlay
+    if (g.state == MENU) {
+        DrawRectangle(0, 0, g.screenW, g.screenH, {0, 0, 0, 180});
+
+        const char* title = "3D CONNECT FOUR";
+        int titleW = MeasureText(title, 50);
+        DrawText(title, g.screenW/2 - titleW/2, g.screenH/2 - 140, 50, WHITE);
+
+        const char* sub = "Select Difficulty";
+        int subW = MeasureText(sub, 24);
+        DrawText(sub, g.screenW/2 - subW/2, g.screenH/2 - 70, 24, {180,180,180,255});
+
+        int bw = 200, bh = 50, gap = 20;
+        int totalH = 3 * bh + 2 * gap;
+        int startY = g.screenH / 2 - totalH / 2 + 40;
+        int bx = g.screenW / 2 - bw / 2;
+        Vector2 mouse = GetMousePosition();
+        Color btnColors[] = { {80,180,80,255}, {60,140,255,255}, {255,80,80,255} };
+
+        for (int i = 0; i < 3; i++) {
+            int by = startY + i * (bh + gap);
+            bool hover = (mouse.x >= bx && mouse.x <= bx + bw && mouse.y >= by && mouse.y <= by + bh);
+            Color bg = hover ? Color{60,60,80,255} : Color{40,40,55,255};
+            DrawRectangleRounded({(float)bx, (float)by, (float)bw, (float)bh}, 0.3f, 8, bg);
+            DrawRectangleRoundedLinesEx({(float)bx, (float)by, (float)bw, (float)bh}, 0.3f, 8, 2.0f, btnColors[i]);
+
+            const char* label = TextFormat("%d. %s", i+1, DIFF_NAMES[i]);
+            int lw = MeasureText(label, 24);
+            DrawText(label, bx + bw/2 - lw/2, by + bh/2 - 12, 24, btnColors[i]);
+        }
     }
 
     EndDrawing();
